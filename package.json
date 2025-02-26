@@ -2,6 +2,7 @@
   "name": "google-payments-renov",
   "version": "1.0.0",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "start": ""
   },
@@ -11,9 +12,12 @@
   "description": "",
   "dependencies": {
     "@google-cloud/storage": "^7.15.1",
+    "axios": "^1.7.9",
+    "bluebird": "^3.7.2",
     "csv-parser": "^3.2.0",
     "dotenv": "^16.4.7",
     "googleapis": "^144.0.0",
+    "lodash": "^4.17.21",
     "mongoose": "^8.10.1"
   }
 }

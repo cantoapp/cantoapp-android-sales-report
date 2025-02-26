@@ -1,20 +1,27 @@
+'use strict';
 // Dependencias
 require('dotenv').config();
 const { google } = require("googleapis");
 const fs = require("fs");
 const path = require("path");
 const csv = require('csv-parser');
+const { default: axios } = require("axios");
+const bluebird = require('bluebird');
+const _ = require('lodash');
+
+// Renovaciones android
+
+// Posibles mejoras
+/* 
+1-que se busque automatico el nombre del fichero en el bucket del mes anterior  y el año actual   / Pendiente de agregar
+
+
+*/
 
 // Paso 0
 // Se borra el viejo reporte
 
-fs.unlink(process.env.destFileName, (err) => {
-  if (err) {
-    console.error(err);
-    return;
-  }
-  console.log('Reporte viejo borrado');
-});
+
 
 // Credenciales del acceso al bucket
 
@@ -51,6 +58,17 @@ function readCsvFile(filePath) {
       .on('end', () => resolve(results))
       .on('error', (error) => reject(error));
   });
+}
+
+function readCsvFileApple(filePath) {
+  var results = [];
+  fs.readFile(filePath, 'utf8', function (err, data) {
+    if (err) throw err; // we'll not consider error handling for now
+    var obj = JSON.parse(data);
+    //console.log(obj.rows)
+    results = obj.rows
+  })
+  return results;
 }
 
 // Inserción en mongo
@@ -104,135 +122,133 @@ async function insertgooglePaymentRenewal(googlePaymentRenewalArray, connection)
   }
 }
 
-/*// Main function
-async function mainInsertion() {
-  // Connect to the database
-  await connectToDatabase();
-
-  // Array of users to insert
-  const usersArray = [
-    { name: 'John', age: 25, city: 'New York' },
-    { name: 'Jane', age: 30, city: 'Los Angeles' },
-    { name: 'Alice', age: 28, city: 'Chicago' },
-  ];
-
-  // Insert the array of users
+async function insertapplePaymentRenewal(applePaymentRenewalArray, connection) {
   try {
-    await insertgooglePaymentRenewal(usersArray);
+    var conn = connection.connection
+    const result = await conn.collection('applePaymentRenewal').insertMany(applePaymentRenewalArray);
+    //console.log(`${result.length} documents inserted`);
+    return result;
   } catch (error) {
-    console.error('Error in main function:', error);
-  } finally {
-    // Close the database connection
-    mongoose.connection.close();
+    console.error('Error insertando documentos:', error);
+    throw error;
   }
 }
 
-*/
+
 // Funcion que hace todo el proceso de descargar el excel y copiarlo a mongo
 
 async function descargaLecturaCSV() {
   // Datos de los ficheros y bucket en env
   // Se descarga el reporte del bucket con el nombre especificado
   try {
-    
+
     // Se comprueba si el fichero se ha leido antes , se lee informacion del log
 
     var arrayLog = fs.readFileSync('./renewalLog.log', 'utf-8').split('\n')
     var lookForFile = arrayLog.find((element) => element == process.env.fileName)
     console.log(lookForFile);
-    if(arrayLog.length==0 || lookForFile==undefined){
-         console.log(lookForFile);
-         console.log('Descargando fichero...');
-         const content = process.env.fileName+'\n';
-         fs.appendFile('renewalLog.log', content, err => {
-           if (err) {
-             console.error(err);
-           } else {
-             // done!
-           }
-         });
-     
-         await downloadFile(process.env.bucketName, process.env.fileName, process.env.destFileName).catch(console.error)
-         // Paso 1: Descarga de fichero
-         console.log('Fichero descargado con éxito.');
-         // Paso 2: Lectura del fichero descargado
-         console.log('Lectura del csv descargado...');
-         const data = await readCsvFile(process.env.destFileName);
-         var i = 0
-         /*
-     {
-       Description: 'GPA.3306-6269-3448-78568',
-       'Transaction Date': 'Dec 23, 2024',
-       'Transaction Time': '1:20:34 PM PST',
-       'Tax Type': '',
-       'Transaction Type': 'Google fee',
-       'Refund Type': '',
-       'Product Title': 'Premium 12 meses (CantoApp)',
-       'Product id': 'net.cantoappou.app',
-       'Product Type': '1',
-       'Sku Id': '09082024_premium12',
-       Hardware: 'a15',
-       'Buyer Country': 'FR',
-       'Buyer State': '',
-       'Buyer Postal Code': '49130',
-       'Buyer Currency': 'EUR',
-       'Amount (Buyer Currency)': '-4.00',
-       'Currency Conversion Rate': '1.000000',
-       'Merchant Currency': 'EUR',
-       'Amount (Merchant Currency)': '-4.00',
-       'Base Plan ID': '14082024-premium-12',
-       'Offer ID': '',
-       'Group ID': '4991888149209182909',
-       'First USD 1M Eligible': 'Yes',
-       'Service Fee %': '15',
-       'Fee Description': 'SUBSCRIPTIONS',
-       'Promotion ID': ''
-     }
-         */
-         var arrayMongoRebase = []
-         while (i < data.length) {
-           if (data[i]['Transaction Type'] == 'Charge') {
-             var googleFee = ""
-             var j = 0;
-             while (j < data.length) {
-               if (data[j]['Transaction Type'] == 'Google fee' && data[j]['Description'] == data[i]['Description']) {
-                 googleFee = data[j]['Amount (Merchant Currency)']
-                 break;
-               }
-               j++;
-             }
-             var objectMongo = {
-               transactionDate: data[i]['Transaction Date'],
-               transactionTime: data[i]['Transaction Time'],
-               country: data[i]['Buyer Country'],
-               transactionId: data[i]['Description'],
-               transactionType: data[i]['Transaction Type'],
-               productId: data[i]['Sku Id'],
-               currency: data[i]['Buyer Currency'],
-               amount: data[i]['Amount (Buyer Currency)'],
-               googleFee: googleFee,
-               conversionRate: data[i]['Currency Conversion Rate'],
-               amountEUR: data[i]['Amount (Merchant Currency)'],
-               basePlanId: data[i]['Base Plan ID'],
-               feeDescription: data[i]['Fee Description'] == '' ? 'Suscription' : 'Renewal',
-             }
-             arrayMongoRebase.push(objectMongo)
-           }
-           i++;
-         }
-         /*const connection = await connectToDatabase();
-         try {
-           await insertgooglePaymentRenewal(arrayMongoRebase, connection);
-         } catch (error) {
-           console.error('Error insertando:', error);
-         } finally {
-           // Cerrando conex a mongo
-           mongoose.connection.close();
-         }*/
-         //console.log('Contenido del csv:', data);
+    if (arrayLog.length == 0 || lookForFile == undefined) {
+      // Paso 0
+      // Se borra el viejo reporte
+      fs.unlink(process.env.destFileName, (err) => {
+        if (err) {
+          console.error(err);
+          return;
+        }
+        console.log('Reporte viejo borrado');
+      });
+      console.log(lookForFile);
+      console.log('Descargando fichero...');
+      const content = process.env.fileName + '\n';
+      fs.appendFile('renewalLog.log', content, err => {
+        if (err) {
+          console.error(err);
+        } else {
+          // done!
+        }
+      });
+
+      await downloadFile(process.env.bucketName, process.env.fileName, process.env.destFileName).catch(console.error)
+      // Paso 1: Descarga de fichero
+      console.log('Fichero descargado con éxito.');
+      // Paso 2: Lectura del fichero descargado
+      console.log('Lectura del csv descargado...');
+      const data = await readCsvFile(process.env.destFileName);
+      var i = 0
+      /*
+  {
+    Description: 'GPA.3306-6269-3448-78568',
+    'Transaction Date': 'Dec 23, 2024',
+    'Transaction Time': '1:20:34 PM PST',
+    'Tax Type': '',
+    'Transaction Type': 'Google fee',
+    'Refund Type': '',
+    'Product Title': 'Premium 12 meses (CantoApp)',
+    'Product id': 'net.cantoappou.app',
+    'Product Type': '1',
+    'Sku Id': '09082024_premium12',
+    Hardware: 'a15',
+    'Buyer Country': 'FR',
+    'Buyer State': '',
+    'Buyer Postal Code': '49130',
+    'Buyer Currency': 'EUR',
+    'Amount (Buyer Currency)': '-4.00',
+    'Currency Conversion Rate': '1.000000',
+    'Merchant Currency': 'EUR',
+    'Amount (Merchant Currency)': '-4.00',
+    'Base Plan ID': '14082024-premium-12',
+    'Offer ID': '',
+    'Group ID': '4991888149209182909',
+    'First USD 1M Eligible': 'Yes',
+    'Service Fee %': '15',
+    'Fee Description': 'SUBSCRIPTIONS',
+    'Promotion ID': ''
+  }
+      */
+      var arrayMongoRebase = []
+      while (i < data.length) {
+        if (data[i]['Transaction Type'] == 'Charge') {
+          var googleFee = ""
+          var j = 0;
+          while (j < data.length) {
+            if (data[j]['Transaction Type'] == 'Google fee' && data[j]['Description'] == data[i]['Description']) {
+              googleFee = data[j]['Amount (Merchant Currency)']
+              break;
+            }
+            j++;
+          }
+          var objectMongo = {
+            transactionDate: data[i]['Transaction Date'],
+            transactionTime: data[i]['Transaction Time'],
+            country: data[i]['Buyer Country'],
+            transactionId: data[i]['Description'],
+            transactionType: data[i]['Transaction Type'],
+            productId: data[i]['Sku Id'],
+            currency: data[i]['Buyer Currency'],
+            amount: data[i]['Amount (Buyer Currency)'],
+            googleFee: googleFee,
+            conversionRate: data[i]['Currency Conversion Rate'],
+            amountEUR: data[i]['Amount (Merchant Currency)'],
+            basePlanId: data[i]['Base Plan ID'],
+            feeDescription: data[i]['Fee Description'] == '' ? 'Suscription' : 'Renewal',
+          }
+          arrayMongoRebase.push(objectMongo)
+        }
+        i++;
+      }
+      const connection = await connectToDatabase();
+      try {
+        await insertgooglePaymentRenewal(arrayMongoRebase, connection);
+      } catch (error) {
+        console.error('Error insertando:', error);
+      } finally {
+        // Cerrando conex a mongo
+        mongoose.connection.close();
+      }
+      //console.log('Contenido del csv:', data);
     }
 
-    
+
   } catch (error) {
     console.error('Error:', error);
   }
@@ -241,3 +257,154 @@ async function descargaLecturaCSV() {
 // Llamada a la función que hace el proceso
 descargaLecturaCSV()
 
+
+// Renovaciones Apple
+/*var urlTransactionsHistory = `https://validator.iaptic.com/v3/transactions`;
+const encoded = Buffer.from('cantoapp:9f733aa3-77c6-4e15-9838-4a8166161c45').toString('base64');
+const headers = { 'Authorization': ' Basic ' + encoded }; // auth header with bearer token
+async function getHistoryTransactions(){
+  const options = {
+    method: "GET",
+    url: urlTransactionsHistory,
+    headers: {
+      'Authorization': 'Basic ' + encoded
+    } 
+  };
+  try {
+    const { status, data = {} } = await axios(options);
+    //console.log("RESPUESTA:",data);
+    return data;
+  } catch (err) {
+    console.log("error", err);
+    return "ERROR WHEN TRYING TO ACCESS TO PAYPAL SERVICE-[" + err + "]";
+  }
+};
+const resultado = getHistoryTransactions();
+resultado.then(function(result) {
+  //console.log(result.rows)
+  var arrayTransaction = result.rows;
+  var i = 0;
+  while (i < arrayTransaction.length) {
+    if(arrayTransaction[i].sandbox!==true){
+      console.log(arrayTransaction[i]);
+    }       
+  }
+})*/
+
+
+async function descargaLecturaCSVApple() {
+  // Datos de los ficheros y bucket en env
+  // Se descarga el reporte del bucket con el nombre especificado
+  try {
+
+    // Se comprueba si el fichero se ha leido antes , se lee informacion del log
+
+    var arrayLog = fs.readFileSync('./renewalLogApple.log', 'utf-8').split('\n')
+    var lookForFile = arrayLog.find((element) => element == process.env.fileNameApple)
+    console.log(lookForFile);
+    if (arrayLog.length == 0 || lookForFile == undefined) {
+      // Paso 0
+      // Se borra el viejo reporte
+      fs.unlink(process.env.destFileNameApple, (err) => {
+        if (err) {
+          console.error(err);
+          return;
+        }
+        console.log('Reporte viejo borrado');
+      });
+      console.log(lookForFile);
+      console.log('Descargando fichero...');
+      const content = process.env.fileNameApple + '\n';
+      fs.appendFile('renewalLogApple.log', content, err => {
+        if (err) {
+          console.error(err);
+        } else {
+          // done!
+        }
+      });
+
+      await downloadFile(process.env.bucketName, process.env.fileNameApple, process.env.destFileNameApple).catch(console.error)
+      // Paso 1: Descarga de fichero
+      console.log('Fichero descargado con éxito.');
+      // Paso 2: Lectura del fichero descargado
+      console.log('Lectura del csv descargado...');
+      //const data = await readCsvFileApple(process.env.destFileNameApple);
+      const readTextFile = _.partial(bluebird.promisify(fs.readFile), _, { encoding: 'utf8', flag: 'r' });
+      const readJsonFile = filename => readTextFile(filename).then(JSON.parse);
+      let data = await readJsonFile(process.env.destFileNameApple);
+      var i = 0
+      //console.log(data.rows)
+      var arrayJson = data.rows
+      /*while (i < arrayJson.length) {
+        if(arrayJson[i].sandbox==false){
+        //console.log(arrayJson[i])
+        }
+        i++
+      }*/
+      /*
+  {
+     sandbox: false,
+  platform: 'apple',
+  productId: 'apple:PREMIUM_12_AUTO',
+  purchaseId: 'apple:500001983017356',
+  transactionId: 'apple:500000932966243',
+  purchaseDate: '2024-12-14T02:11:13.000Z',
+  lastRenewalDate: '2024-12-14T02:11:12.000Z',
+  expirationDate: '2025-12-14T02:11:12.000Z',
+  isIntroPeriod: false,
+  quantity: 1,
+  amountMicros: 29990000,
+  currency: 'USD',
+  renewalIntent: 'Renew',
+  amountUSD: 29.99
+  }
+      */
+      //var arrayJson = data.rows
+      var arrayMongoRebase = []
+      var compareFecha = new Date("2025-02-20");
+
+      while (i < arrayJson.length) {
+        var fechaPurchase = new Date(arrayJson[i].purchaseDate);
+        console.log(fechaPurchase, compareFecha);
+        if (arrayJson[i].sandbox == false && fechaPurchase.getTime() > compareFecha.getTime()) {
+
+          var objectMongo = {
+            transactionDate: arrayJson[i].purchaseDate,
+            transactionTime: arrayJson[i].purchaseDate,
+            country: "UNKNOW",
+            transactionId: arrayJson[i].transactionId,
+            transactionType: arrayJson[i].renewalIntent,
+            productId: arrayJson[i].productId,
+            currency: arrayJson[i].currency,
+            amount: arrayJson[i].amountUSD,
+            googleFee: 0,
+            conversionRate: "UNKNOW",
+            amountEUR: "UNKNOW",
+            basePlanId: arrayJson[i].productId,
+            feeDescription: arrayJson[i].renewalIntent == "" ? "Suscription" : "Renewal",
+          }
+          //console.log(objectMongo);
+          arrayMongoRebase.push(objectMongo)
+        }
+        i++;
+      }
+      console.log(arrayMongoRebase);
+      const connection = await connectToDatabase();
+      try {
+        await insertapplePaymentRenewal(arrayMongoRebase, connection);
+      } catch (error) {
+        console.error('Error insertando:', error);
+      } finally {
+        // Cerrando conex a mongo
+        mongoose.connection.close();
+      }
+      //console.log('Contenido del csv:', data);
+    }
+
+
+  } catch (error) {
+    console.error('Error:', error);
+  }
+}
+
+descargaLecturaCSVApple()

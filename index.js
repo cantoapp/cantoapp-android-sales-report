@@ -1,4 +1,8 @@
 'use strict';
+
+// Script para leer y procesar las transacciones por renovaciones
+// de cantoapp tanto para android como para apple
+
 // Dependencias
 require('dotenv').config();
 const { google } = require("googleapis");
@@ -8,6 +12,139 @@ const csv = require('csv-parser');
 const { default: axios } = require("axios");
 const bluebird = require('bluebird');
 const _ = require('lodash');
+const moment = require('moment');
+const Payment = require('./models/Payment');
+const PartialPayment = require('./models/PartialPayment');
+
+const findOne = (model, id, populates = []) => {
+  return new Promise(function (resolve, reject) {
+    try {
+      let query = model.findOne({
+        _id: new ObjectId(id)
+      });
+      if (populates && populates.length > 0) {
+        populates.forEach(p => {
+          query = query.populate(p);
+        });
+      }
+
+      query.then((res) => {
+        resolve(res);
+      }).catch((err) => {
+        //catch error
+        if (err) reject(err);
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
+
+
+const findOneByTime = (model, field, populates = []) => {
+  return new Promise(function (resolve, reject) {
+    try {
+      let query = model.findOne({
+        platform: field
+      },
+        { sort: { datetime: -1 } },
+        (err, data) => {
+          console.log(data);
+        },
+      );
+      if (populates && populates.length > 0) {
+        populates.forEach(p => {
+          query = query.populate(p);
+        });
+      }
+
+      query.then((res) => {
+        resolve(res);
+      }).catch((err) => {
+        //catch error
+        if (err) reject(err);
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
+
+const find = (model, criteria, populates = []) => {
+  return new Promise(function (resolve, reject) {
+    try {
+      let query = model.find(criteria);
+      if (populates && populates.length > 0) {
+        populates.forEach(p => {
+          query = query.populate(p);
+        });
+      }
+    
+
+      query.then((res) => {
+        resolve(res);
+      }).catch((err) => {
+        //catch error
+        if (err) reject(err);
+      });
+
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
+
+const execute = (query) => {
+  return new Promise(function (resolve, reject) {
+    query.then((res) => {
+      resolve(res);
+    }).catch((err) => {
+      //catch error
+      if (err) reject(err);
+    });
+
+  });
+};
+
+const aggregate = (model, criteria) => {
+  return new Promise(function (resolve, reject) {
+    try {
+      let query = model.aggregate(criteria);
+      query.then((res) => {
+        resolve(res);
+      }).catch((err) => {
+        //catch error
+        if (err) reject(err);
+      });
+
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
+
+const findSort = (model, criteria, populates = []) => {
+  return new Promise(function (resolve, reject) {
+    try {
+      let query = model.find(criteria).sort({ indexNumber: -1 });
+      if (populates && populates.length > 0) {
+        populates.forEach(p => {
+          query = query.populate(p);
+        });
+      }
+    
+      query.then((res) => {
+        resolve(res);
+      }).catch((err) => {
+        //catch error
+        if (err) reject(err);
+      });
+
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
 
 // Renovaciones android
 
@@ -20,8 +157,6 @@ const _ = require('lodash');
 
 // Paso 0
 // Se borra el viejo reporte
-
-
 
 // Credenciales del acceso al bucket
 
@@ -48,7 +183,7 @@ async function downloadFile(bucketName, fileName, destFilePath) {
 }
 
 
-
+// Lectura del csv de android
 function readCsvFile(filePath) {
   return new Promise((resolve, reject) => {
     const results = [];
@@ -60,16 +195,6 @@ function readCsvFile(filePath) {
   });
 }
 
-function readCsvFileApple(filePath) {
-  var results = [];
-  fs.readFile(filePath, 'utf8', function (err, data) {
-    if (err) throw err; // we'll not consider error handling for now
-    var obj = JSON.parse(data);
-    //console.log(obj.rows)
-    results = obj.rows
-  })
-  return results;
-}
 
 // Inserción en mongo
 
@@ -99,8 +224,6 @@ const renewalSchema = new mongoose.Schema({
 async function connectToDatabase() {
   try {
     const connect = await mongoose.connect(process.env.MONGODB_URL, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
     });
     return connect
     console.log('Connectado a MongoDB');
@@ -109,12 +232,11 @@ async function connectToDatabase() {
   }
 }
 
-// Insert an array of data
+// insertar el arreglo de renovaciones de google en mongo
 async function insertgooglePaymentRenewal(googlePaymentRenewalArray, connection) {
   try {
     var conn = connection.connection
     const result = await conn.collection('googlePaymentRenewal').insertMany(googlePaymentRenewalArray);
-    //console.log(`${result.length} documents inserted`);
     return result;
   } catch (error) {
     console.error('Error insertando documentos:', error);
@@ -122,11 +244,68 @@ async function insertgooglePaymentRenewal(googlePaymentRenewalArray, connection)
   }
 }
 
+// Insertar los pagos parciales de las renovaciones
+function insertPartialPayment(renewArray, connection) {
+  try {
+    if (renewArray != undefined) {
+      var frecuency = 0;
+      var plan = renewArray.basePlanId;
+      var amount = renewArray.amount;
+      var transaction = renewArray.transactionId;
+
+      if (plan.includes("PREMIUM_12_AUTO")) {
+        frecuency = 12;
+      }
+      if (plan.includes("PREMIUM_6_AUTO")) {
+        frecuency = 6;
+      }
+      if (plan.includes("PREMIUM_3_AUTO")) {
+        frecuency = 3;
+      }
+      // Se calcula el parcial
+      const partialAmount = _.round(amount / frecuency);
+      
+      console.log(frecuency, partialAmount, plan, amount)
+      
+      // se crean los objetos para insertar los pagos parciales
+
+      for (let i = 0; i < frecuency; i++) {
+        const pDate = moment();
+        if (i > 0) {
+          pDate.add(i, 'months');
+        }
+        /*const partial = new PartialPayment({
+          year: pDate.format('YYYY'),
+          month: pDate.format('MM'),
+          payment: newPayment._id,
+          amount: partialAmount,
+          owner: newPayment.user
+        });*/
+
+        const partialArray = {
+          year: pDate.format('YYYY'),
+          month: pDate.format('MM'),
+          payment: transaction,
+          amount: partialAmount,
+          owner: "UNKNOW"
+        };
+
+        console.log(partialArray);
+      }
+      //await partial.save();
+    }
+    return true;
+  } catch (error) {
+    console.error('Error insertando documentos:', error);
+    throw error;
+  }
+}
+
+// Insertando renovaciones de apple
 async function insertapplePaymentRenewal(applePaymentRenewalArray, connection) {
   try {
     var conn = connection.connection
     const result = await conn.collection('applePaymentRenewal').insertMany(applePaymentRenewalArray);
-    //console.log(`${result.length} documents inserted`);
     return result;
   } catch (error) {
     console.error('Error insertando documentos:', error);
@@ -176,6 +355,7 @@ async function descargaLecturaCSV() {
       const data = await readCsvFile(process.env.destFileName);
       var i = 0
       /*
+  Ejemplo del objeto que viene de android
   {
     Description: 'GPA.3306-6269-3448-78568',
     'Transaction Date': 'Dec 23, 2024',
@@ -205,6 +385,7 @@ async function descargaLecturaCSV() {
     'Promotion ID': ''
   }
       */
+     // Se crea el arreglo de mongo a partir de los objetos de pago de android
       var arrayMongoRebase = []
       while (i < data.length) {
         if (data[i]['Transaction Type'] == 'Charge') {
@@ -236,6 +417,18 @@ async function descargaLecturaCSV() {
         }
         i++;
       }
+      // insertar los pagos parciales
+      while (i < arrayMongoRebase.length) {
+        console.log(arrayMongoRebase[i]);
+        try {
+          const result = insertPartialPayment(arrayMongoRebase[i], connection)
+          console.log(result)
+        } catch (error) {
+          console.error('Error insertando:', error);
+        }
+        i++;
+      }
+      // Insercion de los objetos de pago por renovaciones en mongo
       const connection = await connectToDatabase();
       try {
         await insertgooglePaymentRenewal(arrayMongoRebase, connection);
@@ -245,7 +438,7 @@ async function descargaLecturaCSV() {
         // Cerrando conex a mongo
         mongoose.connection.close();
       }
-      //console.log('Contenido del csv:', data);
+    
     }
 
 
@@ -254,7 +447,7 @@ async function descargaLecturaCSV() {
   }
 }
 
-// Llamada a la función que hace el proceso
+// Llamada a la función que hace el proceso para android
 descargaLecturaCSV()
 
 
@@ -314,6 +507,7 @@ async function descargaLecturaCSVApple() {
       });
       console.log(lookForFile);
       console.log('Descargando fichero...');
+      // se crea el log de lectura
       const content = process.env.fileNameApple + '\n';
       fs.appendFile('renewalLogApple.log', content, err => {
         if (err) {
@@ -328,20 +522,14 @@ async function descargaLecturaCSVApple() {
       console.log('Fichero descargado con éxito.');
       // Paso 2: Lectura del fichero descargado
       console.log('Lectura del csv descargado...');
-      //const data = await readCsvFileApple(process.env.destFileNameApple);
       const readTextFile = _.partial(bluebird.promisify(fs.readFile), _, { encoding: 'utf8', flag: 'r' });
       const readJsonFile = filename => readTextFile(filename).then(JSON.parse);
       let data = await readJsonFile(process.env.destFileNameApple);
       var i = 0
-      //console.log(data.rows)
       var arrayJson = data.rows
-      /*while (i < arrayJson.length) {
-        if(arrayJson[i].sandbox==false){
-        //console.log(arrayJson[i])
-        }
-        i++
-      }*/
-      /*
+      const connection = await connectToDatabase();
+
+    /* Ejemplo de objeto de pago por renovacion que se trae de iaptic
   {
      sandbox: false,
   platform: 'apple',
@@ -359,10 +547,8 @@ async function descargaLecturaCSVApple() {
   amountUSD: 29.99
   }
       */
-      //var arrayJson = data.rows
       var arrayMongoRebase = []
       var compareFecha = new Date("2025-02-20");
-
       while (i < arrayJson.length) {
         var fechaPurchase = new Date(arrayJson[i].purchaseDate);
         console.log(fechaPurchase, compareFecha);
@@ -383,13 +569,25 @@ async function descargaLecturaCSVApple() {
             basePlanId: arrayJson[i].productId,
             feeDescription: arrayJson[i].renewalIntent == "" ? "Suscription" : "Renewal",
           }
-          //console.log(objectMongo);
           arrayMongoRebase.push(objectMongo)
+
         }
         i++;
       }
-      console.log(arrayMongoRebase);
-      const connection = await connectToDatabase();
+      i = 0;
+      // se crean los objetos de pago parcial
+      while (i < arrayMongoRebase.length) {
+        console.log(arrayMongoRebase[i]);
+        try {
+          const result = insertPartialPayment(arrayMongoRebase[i], connection)
+          console.log(result)
+        } catch (error) {
+          console.error('Error insertando:', error);
+        }
+        i++;
+      }
+      // Insercion de los pagos por renovaciones en la coleccion
+      /*const connection = await connectToDatabase();
       try {
         await insertapplePaymentRenewal(arrayMongoRebase, connection);
       } catch (error) {
@@ -397,7 +595,7 @@ async function descargaLecturaCSVApple() {
       } finally {
         // Cerrando conex a mongo
         mongoose.connection.close();
-      }
+      }*/
       //console.log('Contenido del csv:', data);
     }
 
@@ -407,4 +605,5 @@ async function descargaLecturaCSVApple() {
   }
 }
 
+// Llamada a la función que hace el proceso para apple
 descargaLecturaCSVApple()
